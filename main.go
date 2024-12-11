@@ -64,17 +64,40 @@ type Config map[string]float64
 
 func main() {
 
-	cfg := make(map[string]float64)
+	font := canvas.NewFontFamily("fira")
+	if err := font.LoadFontFile("./FiraCodeNerdFont-Regular.ttf", canvas.FontRegular); err != nil {
+		log.Fatal(err)
+	}
 
+	face := font.Face(120, yellow, canvas.FontRegular)
+
+	width := 1000.0
+	stair := make([]Section, 0)
+	stair = append(stair, Section{
+		Kind:       "straight",
+		Steps:      5,
+		EndWidth:   width,
+		StartWidth: width,
+	})
+
+	cfg := make(map[string]float64)
 	cfg["nosing"] = 25
 	cfg["riser_thickness"] = 15
 	cfg["tread_thickness"] = 21
 	cfg["wedge_angle"] = 0.125
 	cfg["riser_rebate"] = 5
+	cfg["going"] = 255
+	cfg["rise"] = 190
 
 	c := canvas.New(500, 300)
 	ctx := canvas.NewContext(c)
 	ctx.SetStrokeWidth(1)
+
+	left, _ := Tips(stair, cfg)
+
+	for i, p := range left {
+		p.Draw(ctx, red, fmt.Sprintf("T%d", i), face)
+	}
 
 	var pth clip.Path
 
@@ -110,7 +133,7 @@ func main() {
 	res, suc := cl.Execute1(clip.CtUnion, clip.PftEvenOdd, clip.PftEvenOdd)
 	pretty.Println(res, suc)
 	thing := fromPath(res[0])
-	drawPoints(thing, ctx, red)
+	drawPoints(thing, ctx, yellow)
 
 	c.Fit(20)
 	err := renderers.Write("testing.png", c, canvas.DPMM(3.2))
@@ -195,6 +218,28 @@ func tr(tip Point, cfg Config) ([]Point, []Point) {
 	return ts, rs
 }
 
+func Tips(sections []Section, config Config) ([]Point, []Point) {
+	ps := make([]Point, 0)
+	at := Point{0, 0}
+	ps = append(ps, at)
+
+	// each section is responsible for amking the step that steps into the next section
+	for _, s := range sections {
+		if s.Kind == "straight" {
+			for i := 1; i < s.Steps; i++ {
+				ps = append(ps, Point{
+					at.X + config["going"]*float64(i),
+					at.Y + config["rise"]*float64(i),
+				})
+			}
+
+		} else {
+
+		}
+	}
+	return ps, nil
+}
+
 func (l *Line) Draw(ctx *canvas.Context, c color.Color) {
 	ctx.SetStrokeColor(c)
 	ctx.MoveTo(l.Start.X, l.Start.Y)
@@ -202,10 +247,15 @@ func (l *Line) Draw(ctx *canvas.Context, c color.Color) {
 	ctx.Stroke()
 }
 
-func (p *Point) Draw(ctx *canvas.Context, c color.Color) {
-	const SIZE = 20
+func (p *Point) Draw(ctx *canvas.Context, c color.Color, text string, face *canvas.FontFace) {
+	const (
+		SIZE   = 20
+		OFFSET = 10
+	)
+
 	a := Line{Point{p.X - SIZE, p.Y}, Point{p.X + SIZE, p.Y}}
 	b := Line{Point{p.X, p.Y - SIZE}, Point{p.X, p.Y + SIZE}}
+	ctx.DrawText(p.X+OFFSET, p.Y-OFFSET, canvas.NewTextBox(face, text, 0, 0, canvas.Left, canvas.Top, 0, 0))
 	a.Draw(ctx, c)
 	b.Draw(ctx, c)
 }
