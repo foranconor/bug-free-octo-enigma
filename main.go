@@ -19,6 +19,10 @@ var (
 	yellow = color.RGBA{255, 255, 179, 255}
 )
 
+const (
+	SCALE = 1000
+)
+
 type Point struct {
 	X float64
 	Y float64
@@ -66,10 +70,11 @@ func main() {
 	cfg["riser_thickness"] = 15
 	cfg["tread_thickness"] = 21
 	cfg["wedge_angle"] = 0.125
+	cfg["riser_rebate"] = 5
 
 	c := canvas.New(500, 300)
 	ctx := canvas.NewContext(c)
-	ctx.SetStrokeWidth(2)
+	ctx.SetStrokeWidth(1)
 
 	var pth clip.Path
 
@@ -82,17 +87,30 @@ func main() {
 	for _, p := range ps {
 		pth = append(pth, clip.NewIntPointFromFloat(p.X, p.Y))
 	}
-	pretty.Println(pth)
 
 	off := clip.NewClipperOffset()
-	off.AddPath(pth, clip.JtRound, clip.EtClosedLine)
 
-	qs := off.Execute(10)
+	ts, rs := tr(Point{0, 0}, cfg)
+	drawPoints(rs, ctx, blue)
+	tps := toPath(ts)
+	off.AddPath(tps, clip.JtSquare, clip.EtClosedPolygon)
+	res := off.Execute(-10.0 * SCALE)
+	pretty.Println(res)
+	//drawPoints(ts, ctx, red)
+	drawPoints(fromPath(res[0]), ctx, yellow)
+	off.Clear()
+	off.AddPath(res[0], clip.JtSquare, clip.EtClosedPolygon)
+	res = off.Execute(-5 * SCALE)
+	drawPoints(fromPath(res[0]), ctx, green)
 
-	pretty.Println(qs)
+	cl := clip.NewClipper(clip.IoNone)
 
-	ts, _ := tr(Point{0, 0}, cfg)
-	drawPoints(ts, ctx, yellow)
+	cl.AddPath(toPath(ts), clip.PtSubject, true)
+	cl.AddPath(toPath(rs), clip.PtClip, true)
+	res, suc := cl.Execute1(clip.CtUnion, clip.PftEvenOdd, clip.PftEvenOdd)
+	pretty.Println(res, suc)
+	thing := fromPath(res[0])
+	drawPoints(thing, ctx, red)
 
 	c.Fit(20)
 	err := renderers.Write("testing.png", c, canvas.DPMM(3.2))
@@ -111,6 +129,23 @@ func drawPoints(ps []Point, ctx *canvas.Context, c color.Color) {
 		ctx.LineTo(ps[i].X, ps[i].Y)
 	}
 	ctx.Stroke()
+}
+
+func toPath(ps []Point) clip.Path {
+	qs := make(clip.Path, len(ps))
+	for i, p := range ps {
+		qs[i] = clip.NewIntPointFromFloat(p.X*SCALE, p.Y*SCALE)
+	}
+	return qs
+}
+
+func fromPath(ps clip.Path) []Point {
+	qs := make([]Point, len(ps))
+	for i, p := range ps {
+		dp := p.ToDoublePoint()
+		qs[i] = Point{dp.X / SCALE, dp.Y / SCALE}
+	}
+	return qs
 }
 
 func tr(tip Point, cfg Config) ([]Point, []Point) {
@@ -137,19 +172,27 @@ func tr(tip Point, cfg Config) ([]Point, []Point) {
 		tip.Y - cfg["tread_thickness"],
 	})
 	ts = append(ts, tip)
-	return ts, nil
-}
+	rs := make([]Point, 0)
+	rTip := Point{
+		tip.X + cfg["nosing"],
+		tip.Y - cfg["tread_thickness"] + cfg["riser_rebate"],
+	}
+	rs = append(rs, rTip)
+	rs = append(rs, Point{
+		rTip.X + cfg["riser_thickness"],
+		rTip.Y,
+	})
+	rs = append(rs, Point{
+		rTip.X + cfg["riser_thickness"] + RC*math.Tan(cfg["wedge_angle"]),
+		rTip.Y - cfg["tread_thickness"] - RC,
+	})
+	rs = append(rs, Point{
+		rTip.X,
+		rTip.Y - cfg["tread_thickness"] - RC,
+	})
+	rs = append(rs, rTip)
 
-func drawPath(ps clip.Path, ctx *canvas.Context, c color.Color) {
-	if len(ps) < 2 {
-		return
-	}
-	ctx.SetStrokeColor(c)
-	ctx.MoveTo(float64(ps[0].X), float64(ps[0].Y))
-	for i := 1; i < len(ps); i++ {
-		ctx.LineTo(float64(ps[i].X), float64(ps[i].Y))
-	}
-	ctx.Stroke()
+	return ts, rs
 }
 
 func (l *Line) Draw(ctx *canvas.Context, c color.Color) {
