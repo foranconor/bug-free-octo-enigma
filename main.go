@@ -6,24 +6,10 @@ import (
 	"log"
 	"math"
 
+	clip "github.com/ctessum/go.clipper"
+	"github.com/kr/pretty"
 	"github.com/tdewolff/canvas"
 	"github.com/tdewolff/canvas/renderers"
-)
-
-const (
-	NOSING               = 25
-	BOTTOM_HORN          = 50
-	TOP_HORN             = 80
-	SKIRTING             = 35
-	TOP_TREAD            = 45
-	TREAD_THICKNESS      = 25
-	RISER_THICKNESS      = 12
-	WEDGE_ANGLE          = 0.125
-	OVERSHOOT            = 12
-	RISER_REBATE         = 5
-	C                    = 100 // constant used for trig
-	NOSING_TOP_RADIUS    = 10
-	NOSING_BOTTOM_RADIUS = 10
 )
 
 var (
@@ -43,22 +29,70 @@ type Line struct {
 	End   Point
 }
 
+type Section struct {
+	Kind       string
+	Steps      int
+	StartWidth float64
+	EndWidth   float64
+}
+
+type Stringer struct {
+	ControlPoints []Line
+	BottomEnd     []Line
+	TopEnd        []Line
+	Section       Section
+}
+
+type Config map[string]float64
+
+// Plan
+// 1. Construct list of tread nosing points
+// 2. filter to those that incur a change of direction
+// 3. collect:
+//	1, start and end lines
+//	2, stringer top and bottom lines
+//	3, join lines
+// 4. make stringer objects
+//
+//
+// TODO things still needing answering
+// * corner point, how to split?
+
 func main() {
+
+	cfg := make(map[string]float64)
+
+	cfg["nosing"] = 25
+	cfg["riser_thickness"] = 15
+	cfg["tread_thickness"] = 21
+	cfg["wedge_angle"] = 0.125
+
 	c := canvas.New(500, 300)
 	ctx := canvas.NewContext(c)
 	ctx.SetStrokeWidth(2)
 
-	steps := 5
-	going := 280.0
-	rise := 182.0
-	width := 280.0
+	var pth clip.Path
 
-	ps := contour(steps, going, rise, width)
-	drawPoints(ps, ctx, yellow)
-	rs := rebates(steps, going, rise, width)
-	for _, r := range rs {
-		drawPoints(r, ctx, red)
+	ps := make([]Point, 0)
+	ps = append(ps, Point{0, 0})
+	ps = append(ps, Point{100, 0})
+	ps = append(ps, Point{100, 100})
+	ps = append(ps, Point{0, 100})
+
+	for _, p := range ps {
+		pth = append(pth, clip.NewIntPointFromFloat(p.X, p.Y))
 	}
+	pretty.Println(pth)
+
+	off := clip.NewClipperOffset()
+	off.AddPath(pth, clip.JtRound, clip.EtClosedLine)
+
+	qs := off.Execute(10)
+
+	pretty.Println(qs)
+
+	ts, _ := tr(Point{0, 0}, cfg)
+	drawPoints(ts, ctx, yellow)
 
 	c.Fit(20)
 	err := renderers.Write("testing.png", c, canvas.DPMM(3.2))
@@ -79,162 +113,59 @@ func drawPoints(ps []Point, ctx *canvas.Context, c color.Color) {
 	ctx.Stroke()
 }
 
-func (l *Line) Draw(ctx *canvas.Context) {
+func tr(tip Point, cfg Config) ([]Point, []Point) {
+	const (
+		TC = 300
+		RC = 300
+	)
+	ts := make([]Point, 0)
+	ts = append(ts, tip)
+	ts = append(ts, Point{
+		tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
+		tip.Y,
+	})
+	ts = append(ts, Point{
+		tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
+		tip.Y - math.Tan(cfg["wedge_angle"])*TC - cfg["tread_thickness"],
+	})
+	ts = append(ts, Point{
+		tip.X + cfg["nosing"] + cfg["riser_thickness"],
+		tip.Y - cfg["tread_thickness"],
+	})
+	ts = append(ts, Point{
+		tip.X,
+		tip.Y - cfg["tread_thickness"],
+	})
+	ts = append(ts, tip)
+	return ts, nil
+}
+
+func drawPath(ps clip.Path, ctx *canvas.Context, c color.Color) {
+	if len(ps) < 2 {
+		return
+	}
+	ctx.SetStrokeColor(c)
+	ctx.MoveTo(float64(ps[0].X), float64(ps[0].Y))
+	for i := 1; i < len(ps); i++ {
+		ctx.LineTo(float64(ps[i].X), float64(ps[i].Y))
+	}
+	ctx.Stroke()
+}
+
+func (l *Line) Draw(ctx *canvas.Context, c color.Color) {
+	ctx.SetStrokeColor(c)
 	ctx.MoveTo(l.Start.X, l.Start.Y)
 	ctx.LineTo(l.End.X, l.End.Y)
 	ctx.Stroke()
 }
 
 func (p *Point) Draw(ctx *canvas.Context, c color.Color) {
-	ctx.SetStrokeColor(c)
-
-	const SIZE = 30
+	const SIZE = 20
 	a := Line{Point{p.X - SIZE, p.Y}, Point{p.X + SIZE, p.Y}}
 	b := Line{Point{p.X, p.Y - SIZE}, Point{p.X, p.Y + SIZE}}
-	a.Draw(ctx)
-	b.Draw(ctx)
+	a.Draw(ctx, c)
+	b.Draw(ctx, c)
 }
-
-func rebates(n int, g, r, w float64) [][]Point {
-	cs := make([][]Point, 0)
-	for i := 0; i < n; i++ {
-		cs = append(cs, treadRebate(i, g, r, w))
-		cs = append(cs, riserRebate(i, g, r, w))
-	}
-	return cs
-}
-
-func riserRebate(n int, g, r, w float64) []Point {
-	ps := make([]Point, 0)
-	at := Point{BOTTOM_HORN + NOSING + RISER_THICKNESS + float64(n)*g, r - TREAD_THICKNESS + float64(n)*r}
-	end := at
-	ps = append(ps, at)
-	at = Point{at.X, at.Y + RISER_REBATE}
-	ps = append(ps, at)
-	at = Point{at.X - RISER_THICKNESS, at.Y}
-	ps = append(ps, at)
-
-	riserFront := Line{at, Point{at.X, at.Y - r}}
-	pl := pitchLine(g, r)
-	extent := pl.Offset(SKIRTING - w - OVERSHOOT)
-	at, _ = intersection(extent, riserFront)
-	ps = append(ps, at)
-	rebateBack := Line{
-		end,
-		Point{
-			end.X + C*math.Tan(WEDGE_ANGLE),
-			end.Y - C,
-		},
-	}
-	at, _ = intersection(extent, rebateBack)
-	ps = append(ps, at)
-	ps = append(ps, end)
-
-	return ps
-}
-
-func treadRebate(n int, g, r, w float64) []Point {
-	ps := make([]Point, 0)
-	at := Point{BOTTOM_HORN + NOSING + RISER_THICKNESS + float64(n)*g, r - TREAD_THICKNESS + float64(n)*r}
-	end := at
-	ps = append(ps, at)
-	at = Point{at.X - NOSING - RISER_THICKNESS, at.Y}
-	ps = append(ps, at)
-	at = Point{at.X, at.Y + TREAD_THICKNESS}
-	ps = append(ps, at)
-
-	treadTop := Line{at, Point{at.X + g, at.Y}}
-
-	pl := pitchLine(g, r)
-	extent := pl.Offset(SKIRTING - w - OVERSHOOT)
-
-	at, _ = intersection(extent, treadTop)
-
-	ps = append(ps, at)
-	rebateBottom := Line{
-		end,
-		Point{
-			end.X + C,
-			end.Y - C*math.Tan(WEDGE_ANGLE),
-		},
-	}
-
-	at, _ = intersection(extent, rebateBottom)
-	ps = append(ps, at)
-	ps = append(ps, end)
-
-	return ps
-}
-
-// starting point is at the back of the riser under the tread
-func nosing(p Point) []Point {
-	ps := make([]Point, 0)
-	brc := Point{p.X - RISER_THICKNESS - NOSING + NOSING_BOTTOM_RADIUS, p.Y + NOSING_BOTTOM_RADIUS}
-	trc := Point{p.X - RISER_THICKNESS - NOSING + NOSING_TOP_RADIUS, p.Y + TREAD_THICKNESS - NOSING_TOP_RADIUS}
-	_ = brc
-	_ = trc
-
-	if NOSING_BOTTOM_RADIUS == 0 {
-
-	}
-
-	return nil
-}
-
-func contour(n int, g, r, w float64) []Point {
-	var (
-		totalRise        = float64(n) * r
-		totalGoing       = float64(n-1)*g + BOTTOM_HORN + NOSING + RISER_THICKNESS
-		q          Point = Point{0, 0}
-	)
-	// lines we care about
-	pitch := pitchLine(g, r)
-	stringerTop := pitch.Offset(SKIRTING)
-	top := Line{
-		Point{0, totalRise},
-		Point{totalGoing, totalRise},
-	}
-	topHorn := top.Offset(TOP_HORN)
-	joist := Line{
-		Point{totalGoing, 0},
-		Point{totalGoing, totalRise},
-	}
-	farHorn := joist.Offset(-TOP_HORN)
-	stringerBottom := stringerTop.Offset(-w)
-	ground := Line{
-		Point{0, 0},
-		Point{totalGoing, 0},
-	}
-
-	// the points that make the contour
-	ps := make([]Point, 0)
-	ps = append(ps, q)
-	q, _ = intersection(Line{q, Point{0, 1}}, stringerTop)
-	ps = append(ps, q)
-	q, _ = intersection(stringerTop, topHorn)
-	ps = append(ps, q)
-	q, _ = intersection(farHorn, topHorn)
-	ps = append(ps, q)
-	q, _ = intersection(farHorn, top)
-	ps = append(ps, q)
-	ps = append(ps, Point{totalGoing, totalRise})
-	q, _ = intersection(joist, stringerBottom)
-	ps = append(ps, q)
-	q, _ = intersection(stringerBottom, ground)
-	ps = append(ps, q)
-	ps = append(ps, Point{0, 0})
-
-	return ps
-}
-
-func pitchLine(g, r float64) Line {
-	p := Line{
-		Point{0, 0},
-		Point{g, r},
-	}
-	return p.Translate(Point{BOTTOM_HORN, r})
-}
-
 func intersection(a, b Line) (Point, error) {
 	i := a.Start.X - a.End.X
 	j := b.Start.Y - b.End.Y
