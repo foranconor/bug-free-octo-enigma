@@ -42,7 +42,8 @@ type Section struct {
 
 type Stringer struct {
 	Treads  []Point
-	Contour []Line
+	Rebates []Point
+	Contour []Point
 	Name    string
 }
 
@@ -97,13 +98,16 @@ func main() {
 	cfg["tread_thickness"] = 21
 	cfg["wedge_angle"] = 0.125
 	cfg["riser_rebate"] = 5
-	cfg["going"] = 255
-	cfg["rise"] = 190
-	cfg["bottom_horn"] = 50
-	cfg["skirting"] = 30
-	cfg["stringer_width"] = 235
+	cfg["going"] = 265
+	cfg["rise"] = 183
+	cfg["bottom_horn"] = 100
+	cfg["skirting"] = 40
+	cfg["stringer_width"] = 280
 	cfg["top_horn_height"] = 80
 	cfg["top_horn_length"] = 80
+	cfg["stringer_thickness"] = 33
+	cfg["trenching_radius"] = 11
+	cfg["machining_extra"] = 3
 
 	pretty.Println(cfg)
 
@@ -116,30 +120,117 @@ func main() {
 
 	left, _ := Tips(stair, cfg)
 
-	for i, p := range left {
-		p.Draw(ctx, red, fmt.Sprintf("T%d", i+1), face)
-		ts, rs := tr(p, cfg)
-		drawPoints(ts, ctx, blue)
-		drawPoints(rs, ctx, blue)
-
-	}
-	drawPoints(left, ctx, green)
+	// for i, p := range left {
+	// 	//p.Draw(ctx, red, fmt.Sprintf("T%d", i+1), face)
+	// 	ts, rs := tr(p, cfg)
+	// 	//drawPoints(ts, ctx, blue)
+	// 	//drawPoints(rs, ctx, blue)
+	//
+	// }
+	//drawPoints(left, ctx, green)
 
 	stringers := make([]Stringer, 0)
 	_ = stringers
 
 	cps := ControlPoints(left, stair)
 
+	num := 1
+	part := 1
+
+	rebates := make(clip.Paths, 0)
+	for _, t := range left {
+		ts, rs := tr(t, cfg)
+		tp := toPath(ts)
+		rp := toPath(rs)
+		rebates = append(rebates, tp, rp)
+	}
+
+	un := clip.NewClipper(clip.IoNone)
+	un.AddPaths(rebates, clip.PtClip, true)
+	unionedRebates, suc := un.Execute1(clip.CtUnion, clip.PftNonZero, clip.PftNonZero)
+	pretty.Println(suc)
+
 	for i, s := range stair {
 		switch s.Kind {
 		case "straight":
 			contour := StraightContour(stair, cps, i, cfg, ctx, face)
-			//drawPoints(contour, ctx, yellow)
-			_ = contour
+			drawPoints(contour, ctx, yellow)
+			name := fmt.Sprintf("%dLP%d", num, part)
+			pretty.Println(name)
+			part = part + 1
+			path := toPath(contour)
+			off := clip.NewClipperOffset()
+			off.AddPath(path, clip.JtSquare, clip.EtClosedPolygon)
+			res := off.Execute((cfg["trenching_radius"] + cfg["machining_extra"]) * 1000)
+			//k := fromPath(res[0])
+			//drawPoints(k, ctx, green)
+			cl := clip.NewClipper(clip.IoNone)
+			cl.AddPath(res[0], clip.PtClip, true)
+			cl.AddPaths(unionedRebates, clip.PtSubject, true)
+			intRes, _ := cl.Execute1(clip.CtIntersection, clip.PftEvenOdd, clip.PftEvenOdd)
+			for _, j := range intRes {
 
+				rem := fromPath(j)
+				drawPoints(rem, ctx, red)
+			}
 		default:
 			contour := OutsideWinderContour(stair, cps, i, cfg, ctx, face)
+			contour[0].Draw(ctx, green, "start", face)
+			contour[1].Draw(ctx, green, "next", face)
+
 			drawPoints(contour, ctx, yellow)
+			// split winder on turn
+			sx := cps[i][0].X + s.EndWidth
+			split := Line{
+				Point{sx, 0},
+				Point{sx, 4000},
+			}
+			split.Draw(ctx, red)
+			lower := make([]Point, 0)
+			upper := make([]Point, 0)
+			onLower := true
+			_ = lower
+			// go around the stringer and find the split
+			for i, c := range contour {
+				line := Line{c, contour[(i+1)%len(contour)]}
+				if onLower {
+					lower = append(lower, c)
+					if sx > line.Start.X && sx < line.End.X {
+						// this line straddles to split, get the intersection
+						x, _ := intersection(split, line)
+						lower = append(lower, x)
+						lower = append(lower, Point{
+							x.X + cfg["stringer_thickness"],
+							x.Y,
+						})
+						upper = append(upper, x)
+						onLower = false
+					}
+				} else {
+					upper = append(upper, c)
+					if sx < line.Start.X && sx > line.End.X {
+						x, _ := intersection(split, line)
+						upper = append(upper, x)
+						upper = append(upper, upper[0])
+						lower = append(lower, Point{
+							x.X + cfg["stringer_thickness"],
+							x.Y,
+						})
+						lower = append(lower, x)
+						onLower = true
+					}
+				}
+			}
+			drawPoints(lower, ctx, green)
+			drawPoints(upper, ctx, blue)
+			lowerName := fmt.Sprintf("%dLP%d", num, part)
+			num = num + 1
+			part = 1
+			upperName := fmt.Sprintf("%dLP%d", num, part)
+			part = 2
+			pretty.Println(lowerName)
+			pretty.Println(upperName)
+
 		}
 	}
 
@@ -219,11 +310,6 @@ func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config 
 	if index == 0 {
 		lines = append(lines, BottomLines()...)
 	} else {
-		pretty.Println("here")
-		tops[0].Draw(ctx, red)
-		bottoms[0].Draw(ctx, red)
-		drawPoints(pitches[index-1], ctx, yellow)
-		pp[0].Start.Draw(ctx, yellow, "pp0", face)
 		lines = append(lines, JoinBelow(pitches[index-1], pp[0].Start, tops[0], bottoms[0], config, true))
 	}
 	lines = append(lines, tops...)
@@ -233,11 +319,16 @@ func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config 
 	} else {
 		lines = append(lines, JoinAbove(pitches[index+1], pp[len(pp)-1].End, tops[len(tops)-1], bottoms[len(bottoms)-1], config))
 	}
-	lines = append(lines, bottoms...)
-	pretty.Println(lines)
-	for _, l := range lines {
-		l.Draw(ctx, blue)
+	reversedBottoms := make([]Line, 0)
+	for i := len(bottoms) - 1; i >= 0; i-- {
+		rl := Line{
+			bottoms[i].End,
+			bottoms[i].Start,
+		}
+		reversedBottoms = append(reversedBottoms, rl)
 	}
+	lines = append(lines, reversedBottoms...)
+
 	contour := MakeContour(lines)
 	return contour
 }
@@ -250,10 +341,6 @@ func StraightContour(stair []Section, pitches [][]Point, index int, config Confi
 		// lines that make up the bottom of the stair
 		lines = append(lines, BottomLines()...)
 	} else {
-		p.Start.Draw(ctx, yellow, "pstart", face)
-		top.Draw(ctx, red)
-		bottom.Draw(ctx, red)
-		drawPoints(pitches[index-1], ctx, yellow)
 		lines = append(lines, JoinBelow(pitches[index-1], p.Start, top, bottom, config, false))
 	}
 	// top line of stringer
@@ -294,7 +381,6 @@ func BottomLines() []Line {
 }
 
 func JoinBelow(pitch []Point, start Point, top, bottom Line, config Config, winder bool) Line {
-	pretty.Println("pitch", pitch, "start", start, "top", top, "bottom", bottom)
 	// join with the stringer below
 	offset := -1
 	if winder {
@@ -396,12 +482,13 @@ func fromPath(ps clip.Path) []Point {
 		dp := p.ToDoublePoint()
 		qs[i] = Point{dp.X / SCALE, dp.Y / SCALE}
 	}
+	qs = append(qs, qs[0])
 	return qs
 }
 
 func tr(tip Point, cfg Config) ([]Point, []Point) {
 	const (
-		TC = 300
+		TC = 1000
 		RC = 300
 	)
 	ts := make([]Point, 0)
