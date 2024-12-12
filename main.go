@@ -41,10 +41,9 @@ type Section struct {
 }
 
 type Stringer struct {
-	ControlPoints []Line
-	BottomEnd     []Line
-	TopEnd        []Line
-	Section       Section
+	Treads  []Point
+	Contour []Line
+	Name    string
 }
 
 type Config map[string]float64
@@ -75,7 +74,19 @@ func main() {
 	stair := make([]Section, 0)
 	stair = append(stair, Section{
 		Kind:       "straight",
-		Steps:      5,
+		Steps:      3,
+		EndWidth:   width,
+		StartWidth: width,
+	})
+	stair = append(stair, Section{
+		Kind:       "right",
+		Steps:      3,
+		EndWidth:   width,
+		StartWidth: width,
+	})
+	stair = append(stair, Section{
+		Kind:       "straight",
+		Steps:      10,
 		EndWidth:   width,
 		StartWidth: width,
 	})
@@ -88,58 +99,275 @@ func main() {
 	cfg["riser_rebate"] = 5
 	cfg["going"] = 255
 	cfg["rise"] = 190
+	cfg["bottom_horn"] = 50
+	cfg["skirting"] = 30
+	cfg["stringer_width"] = 235
+	cfg["top_horn_height"] = 80
+	cfg["top_horn_length"] = 80
+
+	pretty.Println(cfg)
 
 	c := canvas.New(500, 300)
 	ctx := canvas.NewContext(c)
-	ctx.SetStrokeWidth(1)
+	ctx.SetStrokeWidth(2)
+
+	o := Point{0, 0}
+	o.Draw(ctx, blue, "(0, 0)", face)
 
 	left, _ := Tips(stair, cfg)
 
 	for i, p := range left {
-		p.Draw(ctx, red, fmt.Sprintf("T%d", i), face)
+		p.Draw(ctx, red, fmt.Sprintf("T%d", i+1), face)
+		ts, rs := tr(p, cfg)
+		drawPoints(ts, ctx, blue)
+		drawPoints(rs, ctx, blue)
+
+	}
+	drawPoints(left, ctx, green)
+
+	stringers := make([]Stringer, 0)
+	_ = stringers
+
+	cps := ControlPoints(left, stair)
+
+	for i, s := range stair {
+		switch s.Kind {
+		case "straight":
+			contour := StraightContour(stair, cps, i, cfg, ctx, face)
+			//drawPoints(contour, ctx, yellow)
+			_ = contour
+
+		default:
+			contour := OutsideWinderContour(stair, cps, i, cfg, ctx, face)
+			drawPoints(contour, ctx, yellow)
+		}
 	}
 
-	var pth clip.Path
+	// var pth clip.Path
+	//
+	// ps := make([]Point, 0)
+	// ps = append(ps, Point{0, 0})
+	// ps = append(ps, Point{100, 0})
+	// ps = append(ps, Point{100, 100})
+	// ps = append(ps, Point{0, 100})
+	//
+	// for _, p := range ps {
+	// 	pth = append(pth, clip.NewIntPointFromFloat(p.X, p.Y))
+	// }
 
-	ps := make([]Point, 0)
-	ps = append(ps, Point{0, 0})
-	ps = append(ps, Point{100, 0})
-	ps = append(ps, Point{100, 100})
-	ps = append(ps, Point{0, 100})
-
-	for _, p := range ps {
-		pth = append(pth, clip.NewIntPointFromFloat(p.X, p.Y))
-	}
-
-	off := clip.NewClipperOffset()
-
-	ts, rs := tr(Point{0, 0}, cfg)
-	drawPoints(rs, ctx, blue)
-	tps := toPath(ts)
-	off.AddPath(tps, clip.JtSquare, clip.EtClosedPolygon)
-	res := off.Execute(-10.0 * SCALE)
-	pretty.Println(res)
-	//drawPoints(ts, ctx, red)
-	drawPoints(fromPath(res[0]), ctx, yellow)
-	off.Clear()
-	off.AddPath(res[0], clip.JtSquare, clip.EtClosedPolygon)
-	res = off.Execute(-5 * SCALE)
-	drawPoints(fromPath(res[0]), ctx, green)
-
-	cl := clip.NewClipper(clip.IoNone)
-
-	cl.AddPath(toPath(ts), clip.PtSubject, true)
-	cl.AddPath(toPath(rs), clip.PtClip, true)
-	res, suc := cl.Execute1(clip.CtUnion, clip.PftEvenOdd, clip.PftEvenOdd)
-	pretty.Println(res, suc)
-	thing := fromPath(res[0])
-	drawPoints(thing, ctx, yellow)
+	//	off := clip.NewClipperOffset()
+	//
+	//	ts, rs := tr(Point{0, 0}, cfg)
+	//	drawPoints(rs, ctx, blue)
+	//	tps := toPath(ts)
+	//	off.AddPath(tps, clip.JtSquare, clip.EtClosedPolygon)
+	//	res := off.Execute(-10.0 * SCALE)
+	//	pretty.Println(res)
+	//	//drawPoints(ts, ctx, red)
+	//	drawPoints(fromPath(res[0]), ctx, yellow)
+	//	off.Clear()
+	//	off.AddPath(res[0], clip.JtSquare, clip.EtClosedPolygon)
+	//	res = off.Execute(-5 * SCALE)
+	//	drawPoints(fromPath(res[0]), ctx, green)
+	//
+	//	cl := clip.NewClipper(clip.IoNone)
+	//
+	//	cl.AddPath(toPath(ts), clip.PtSubject, true)
+	//	cl.AddPath(toPath(rs), clip.PtClip, true)
+	//	res, suc := cl.Execute1(clip.CtUnion, clip.PftEvenOdd, clip.PftEvenOdd)
+	//	pretty.Println(res, suc)
+	//	thing := fromPath(res[0])
+	//	drawPoints(thing, ctx, yellow)
 
 	c.Fit(20)
 	err := renderers.Write("testing.png", c, canvas.DPMM(3.2))
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+func MakeContour(lines []Line) []Point {
+	ps := make([]Point, 0)
+	for i := 0; i < len(lines); i++ {
+		p, _ := intersection(lines[i], lines[(i+1)%len(lines)])
+		ps = append(ps, p)
+	}
+	ps = append(ps, ps[0])
+	return ps
+}
+
+func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config Config, ctx *canvas.Context, face *canvas.FontFace) []Point {
+	lines := make([]Line, 0)
+
+	pp := make([]Line, 0)
+	for i := 1; i < len(pitches[index]); i++ {
+		pitch := Line{pitches[index][i-1], pitches[index][i]}
+		pp = append(pp, pitch)
+	}
+	pp = append(pp, Line{
+		pitches[index][len(pitches[index])-1],
+		pitches[index+1][0],
+	})
+	tops := make([]Line, 0)
+	bottoms := make([]Line, 0)
+	for _, l := range pp {
+		t := l.Offset(config["skirting"])
+		b := l.Offset(config["skirting"] - config["stringer_width"])
+		tops = append(tops, t)
+		bottoms = append(bottoms, b)
+	}
+	if index == 0 {
+		lines = append(lines, BottomLines()...)
+	} else {
+		pretty.Println("here")
+		tops[0].Draw(ctx, red)
+		bottoms[0].Draw(ctx, red)
+		drawPoints(pitches[index-1], ctx, yellow)
+		pp[0].Start.Draw(ctx, yellow, "pp0", face)
+		lines = append(lines, JoinBelow(pitches[index-1], pp[0].Start, tops[0], bottoms[0], config, true))
+	}
+	lines = append(lines, tops...)
+
+	if index == len(stair)-1 {
+		lines = append(lines, TopLines(stair, config)...)
+	} else {
+		lines = append(lines, JoinAbove(pitches[index+1], pp[len(pp)-1].End, tops[len(tops)-1], bottoms[len(bottoms)-1], config))
+	}
+	lines = append(lines, bottoms...)
+	pretty.Println(lines)
+	for _, l := range lines {
+		l.Draw(ctx, blue)
+	}
+	contour := MakeContour(lines)
+	return contour
+}
+
+func StraightContour(stair []Section, pitches [][]Point, index int, config Config, ctx *canvas.Context, face *canvas.FontFace) []Point {
+	lines := make([]Line, 0)
+	p := Line{pitches[index][0], pitches[index][1]}
+	top, bottom := p.StringTopBottom(config)
+	if index == 0 {
+		// lines that make up the bottom of the stair
+		lines = append(lines, BottomLines()...)
+	} else {
+		p.Start.Draw(ctx, yellow, "pstart", face)
+		top.Draw(ctx, red)
+		bottom.Draw(ctx, red)
+		drawPoints(pitches[index-1], ctx, yellow)
+		lines = append(lines, JoinBelow(pitches[index-1], p.Start, top, bottom, config, false))
+	}
+	// top line of stringer
+	lines = append(lines, top)
+	if index == len(stair)-1 {
+		// top of the stair
+		lines = append(lines, TopLines(stair, config)...)
+	} else {
+		// join with the section above
+		ap := Line{p.End, pitches[index+1][1]}
+		atop, abot := ap.StringTopBottom(config)
+		a, _ := intersection(top, atop)
+		b, _ := intersection(bottom, abot)
+		lines = append(lines, Line{a, b})
+	}
+	lines = append(lines, bottom)
+	contour := MakeContour(lines)
+	return contour
+}
+
+func (l *Line) StringTopBottom(config Config) (Line, Line) {
+	top := l.Offset(config["skirting"])
+	bottom := l.Offset(config["skirting"] - config["stringer_width"])
+	return top, bottom
+}
+
+func BottomLines() []Line {
+	ground := Line{
+		Point{0, 0}, Point{100, 0},
+	}
+	front := Line{
+		Point{0, 0}, Point{0, 100},
+	}
+	ls := make([]Line, 2)
+	ls[0] = ground
+	ls[1] = front
+	return ls
+}
+
+func JoinBelow(pitch []Point, start Point, top, bottom Line, config Config, winder bool) Line {
+	pretty.Println("pitch", pitch, "start", start, "top", top, "bottom", bottom)
+	// join with the stringer below
+	offset := -1
+	if winder {
+		offset = -2
+	}
+	bp := Line{pitch[len(pitch)+offset], start}
+	bt, bb := bp.StringTopBottom(config)
+	a, _ := intersection(top, bt)
+	b, _ := intersection(bottom, bb)
+	return Line{a, b}
+}
+
+func JoinAbove(pitch []Point, end Point, top, bottom Line, config Config) Line {
+	ap := Line{end, pitch[len(pitch)-1]}
+	atop, abot := ap.StringTopBottom(config)
+	a, _ := intersection(top, atop)
+	b, _ := intersection(bottom, abot)
+	return Line{a, b}
+}
+
+func TopLines(stair []Section, config Config) []Line {
+	tr := TotalRise(stair, config)
+	tg := OutsideGoing(stair, config) + config["bottom_horn"] + config["riser_thickness"] + config["nosing"]
+	topFloor := Line{Point{0, tr}, Point{tg, tr}}
+	joist := Line{Point{tg, tr}, Point{tg, 0}}
+	hornTop := topFloor.Offset(config["top_horn_height"])
+	hornBack := joist.Offset(config["top_horn_length"])
+	ls := make([]Line, 4)
+	ls[0] = hornTop
+	ls[1] = hornBack
+	ls[2] = topFloor
+	ls[3] = joist
+	return ls
+}
+
+func TotalRise(stair []Section, config Config) float64 {
+	rise := 0.0
+	for _, s := range stair {
+		rise = rise + float64(s.Steps)*config["rise"]
+	}
+	return rise + config["rise"]
+}
+
+func OutsideGoing(stair []Section, config Config) float64 {
+	going := 0.0
+	for _, s := range stair {
+		if s.Kind == "straight" {
+			going = going + float64(s.Steps)*config["going"]
+		} else {
+			going = going + s.StartWidth + s.EndWidth
+		}
+	}
+	return going
+}
+
+func ControlPoints(ts []Point, stair []Section) [][]Point {
+	cps := make([][]Point, 0)
+	for i := 0; i < len(stair); i++ {
+		end := 0
+		for j := i; j >= 0; j-- {
+			end = end + stair[j].Steps
+		}
+		start := end - stair[i].Steps
+		ps := make([]Point, 0)
+		if stair[i].Kind == "straight" {
+			ps = append(ps, ts[start])
+			ps = append(ps, ts[end])
+		} else {
+			ps = append(ps, ts[start:end]...)
+		}
+		cps = append(cps, ps)
+	}
+	return cps
 }
 
 func drawPoints(ps []Point, ctx *canvas.Context, c color.Color) {
@@ -220,21 +448,37 @@ func tr(tip Point, cfg Config) ([]Point, []Point) {
 
 func Tips(sections []Section, config Config) ([]Point, []Point) {
 	ps := make([]Point, 0)
-	at := Point{0, 0}
+	at := Point{config["bottom_horn"], config["rise"]}
 	ps = append(ps, at)
 
 	// each section is responsible for amking the step that steps into the next section
 	for _, s := range sections {
 		if s.Kind == "straight" {
-			for i := 1; i < s.Steps; i++ {
+			for i := 1; i <= s.Steps; i++ {
 				ps = append(ps, Point{
 					at.X + config["going"]*float64(i),
 					at.Y + config["rise"]*float64(i),
 				})
 			}
-
+			at = ps[len(ps)-1]
 		} else {
-
+			angle := math.Pi / 2 / float64(s.Steps)
+			if s.Steps == 3 {
+				// step 1
+				ps = append(ps, Point{
+					at.X + math.Tan(angle)*s.StartWidth,
+					at.Y + config["rise"],
+				})
+				ps = append(ps, Point{
+					at.X + s.EndWidth + s.StartWidth - s.StartWidth*math.Tan(angle),
+					at.Y + 2*config["rise"],
+				})
+				ps = append(ps, Point{
+					at.X + s.EndWidth + s.StartWidth,
+					at.Y + 3*config["rise"],
+				})
+				at = ps[len(ps)-1]
+			}
 		}
 	}
 	return ps, nil
