@@ -5,6 +5,8 @@ import (
 	"image/color"
 	"log"
 	"math"
+	"threeTest/config"
+	"threeTest/geo"
 
 	clip "github.com/ctessum/go.clipper"
 	"github.com/kr/pretty"
@@ -23,16 +25,6 @@ const (
 	SCALE = 1000
 )
 
-type Point struct {
-	X float64
-	Y float64
-}
-
-type Line struct {
-	Start Point
-	End   Point
-}
-
 type Section struct {
 	Kind       string
 	Steps      int
@@ -41,35 +33,20 @@ type Section struct {
 }
 
 type Stringer struct {
-	Treads  []Point
-	Rebates []Point
-	Contour []Point
+	Treads  []geo.Point
+	Rebates []geo.Point
+	Contour []geo.Point
 	Name    string
 }
-
-type Config map[string]float64
-
-// Plan
-// 1. Construct list of tread nosing points
-// 2. filter to those that incur a change of direction
-// 3. collect:
-//	1, start and end lines
-//	2, stringer top and bottom lines
-//	3, join lines
-// 4. make stringer objects
-//
-//
-// TODO things still needing answering
-// * corner point, how to split?
 
 func main() {
 
 	font := canvas.NewFontFamily("fira")
-	if err := font.LoadFontFile("./FiraCodeNerdFont-Regular.ttf", canvas.FontRegular); err != nil {
+	if err := font.LoadFontFile("./FiraCode-Regular.ttf", canvas.FontRegular); err != nil {
 		log.Fatal(err)
 	}
 
-	face := font.Face(120, yellow, canvas.FontRegular)
+	face := font.Face(12, 0, yellow, canvas.FontRegular)
 
 	width := 1000.0
 	stair := make([]Section, 0)
@@ -92,30 +69,13 @@ func main() {
 		StartWidth: width,
 	})
 
-	cfg := make(map[string]float64)
-	cfg["nosing"] = 25
-	cfg["riser_thickness"] = 15
-	cfg["tread_thickness"] = 21
-	cfg["wedge_angle"] = 0.125
-	cfg["riser_rebate"] = 5
-	cfg["going"] = 265
-	cfg["rise"] = 183
-	cfg["bottom_horn"] = 100
-	cfg["skirting"] = 40
-	cfg["stringer_width"] = 280
-	cfg["top_horn_height"] = 80
-	cfg["top_horn_length"] = 80
-	cfg["stringer_thickness"] = 33
-	cfg["trenching_radius"] = 11
-	cfg["machining_extra"] = 3
-
-	pretty.Println(cfg)
+	cfg := config.LoadConfig("something")
 
 	c := canvas.New(500, 300)
 	ctx := canvas.NewContext(c)
 	ctx.SetStrokeWidth(2)
 
-	o := Point{0, 0}
+	o := geo.Point{X: 0, Y: 0}
 	o.Draw(ctx, blue, "(0, 0)", face)
 
 	left, _ := Tips(stair, cfg)
@@ -181,27 +141,30 @@ func main() {
 			drawPoints(contour, ctx, yellow)
 			// split winder on turn
 			sx := cps[i][0].X + s.EndWidth
-			split := Line{
-				Point{sx, 0},
-				Point{sx, 4000},
+			split := geo.Line{
+				Start: geo.Point{X: sx, Y: 0},
+				End:   geo.Point{X: sx, Y: 4000},
 			}
 			split.Draw(ctx, red)
-			lower := make([]Point, 0)
-			upper := make([]Point, 0)
+			lower := make([]geo.Point, 0)
+			upper := make([]geo.Point, 0)
 			onLower := true
 			_ = lower
 			// go around the stringer and find the split
 			for i, c := range contour {
-				line := Line{c, contour[(i+1)%len(contour)]}
+				line := geo.Line{
+					Start: c,
+					End:   contour[(i+1)%len(contour)],
+				}
 				if onLower {
 					lower = append(lower, c)
 					if sx > line.Start.X && sx < line.End.X {
 						// this line straddles to split, get the intersection
-						x, _ := intersection(split, line)
+						x, _ := geo.Intersection(split, line)
 						lower = append(lower, x)
-						lower = append(lower, Point{
-							x.X + cfg["stringer_thickness"],
-							x.Y,
+						lower = append(lower, geo.Point{
+							X: x.X + cfg["stringer_thickness"],
+							Y: x.Y,
 						})
 						upper = append(upper, x)
 						onLower = false
@@ -209,12 +172,12 @@ func main() {
 				} else {
 					upper = append(upper, c)
 					if sx < line.Start.X && sx > line.End.X {
-						x, _ := intersection(split, line)
+						x, _ := geo.Intersection(split, line)
 						upper = append(upper, x)
 						upper = append(upper, upper[0])
-						lower = append(lower, Point{
-							x.X + cfg["stringer_thickness"],
-							x.Y,
+						lower = append(lower, geo.Point{
+							X: x.X + cfg["stringer_thickness"],
+							Y: x.Y,
 						})
 						lower = append(lower, x)
 						onLower = true
@@ -277,30 +240,33 @@ func main() {
 	}
 }
 
-func MakeContour(lines []Line) []Point {
-	ps := make([]Point, 0)
+func MakeContour(lines []geo.Line) []geo.Point {
+	ps := make([]geo.Point, 0)
 	for i := 0; i < len(lines); i++ {
-		p, _ := intersection(lines[i], lines[(i+1)%len(lines)])
+		p, _ := geo.Intersection(lines[i], lines[(i+1)%len(lines)])
 		ps = append(ps, p)
 	}
 	ps = append(ps, ps[0])
 	return ps
 }
 
-func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config Config, ctx *canvas.Context, face *canvas.FontFace) []Point {
-	lines := make([]Line, 0)
+func OutsideWinderContour(stair []Section, pitches [][]geo.Point, index int, config config.Params, ctx *canvas.Context, face *canvas.FontFace) []geo.Point {
+	lines := make([]geo.Line, 0)
 
-	pp := make([]Line, 0)
+	pp := make([]geo.Line, 0)
 	for i := 1; i < len(pitches[index]); i++ {
-		pitch := Line{pitches[index][i-1], pitches[index][i]}
+		pitch := geo.Line{
+			Start: pitches[index][i-1],
+			End:   pitches[index][i],
+		}
 		pp = append(pp, pitch)
 	}
-	pp = append(pp, Line{
-		pitches[index][len(pitches[index])-1],
-		pitches[index+1][0],
+	pp = append(pp, geo.Line{
+		Start: pitches[index][len(pitches[index])-1],
+		End:   pitches[index+1][0],
 	})
-	tops := make([]Line, 0)
-	bottoms := make([]Line, 0)
+	tops := make([]geo.Line, 0)
+	bottoms := make([]geo.Line, 0)
 	for _, l := range pp {
 		t := l.Offset(config["skirting"])
 		b := l.Offset(config["skirting"] - config["stringer_width"])
@@ -319,11 +285,11 @@ func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config 
 	} else {
 		lines = append(lines, JoinAbove(pitches[index+1], pp[len(pp)-1].End, tops[len(tops)-1], bottoms[len(bottoms)-1], config))
 	}
-	reversedBottoms := make([]Line, 0)
+	reversedBottoms := make([]geo.Line, 0)
 	for i := len(bottoms) - 1; i >= 0; i-- {
-		rl := Line{
-			bottoms[i].End,
-			bottoms[i].Start,
+		rl := geo.Line{
+			Start: bottoms[i].End,
+			End:   bottoms[i].Start,
 		}
 		reversedBottoms = append(reversedBottoms, rl)
 	}
@@ -333,10 +299,13 @@ func OutsideWinderContour(stair []Section, pitches [][]Point, index int, config 
 	return contour
 }
 
-func StraightContour(stair []Section, pitches [][]Point, index int, config Config, ctx *canvas.Context, face *canvas.FontFace) []Point {
-	lines := make([]Line, 0)
-	p := Line{pitches[index][0], pitches[index][1]}
-	top, bottom := p.StringTopBottom(config)
+func StraightContour(stair []Section, pitches [][]geo.Point, index int, config config.Params, ctx *canvas.Context, face *canvas.FontFace) []geo.Point {
+	lines := make([]geo.Line, 0)
+	p := geo.Line{
+		Start: pitches[index][0],
+		End:   pitches[index][1],
+	}
+	top, bottom := StringTopBottom(p, config)
 	if index == 0 {
 		// lines that make up the bottom of the stair
 		lines = append(lines, BottomLines()...)
@@ -350,65 +319,91 @@ func StraightContour(stair []Section, pitches [][]Point, index int, config Confi
 		lines = append(lines, TopLines(stair, config)...)
 	} else {
 		// join with the section above
-		ap := Line{p.End, pitches[index+1][1]}
-		atop, abot := ap.StringTopBottom(config)
-		a, _ := intersection(top, atop)
-		b, _ := intersection(bottom, abot)
-		lines = append(lines, Line{a, b})
+		ap := geo.Line{
+			Start: p.End,
+			End:   pitches[index+1][1],
+		}
+		atop, abot := StringTopBottom(ap, config)
+		a, _ := geo.Intersection(top, atop)
+		b, _ := geo.Intersection(bottom, abot)
+		lines = append(lines, geo.Line{
+			Start: a,
+			End:   b,
+		})
 	}
 	lines = append(lines, bottom)
 	contour := MakeContour(lines)
 	return contour
 }
 
-func (l *Line) StringTopBottom(config Config) (Line, Line) {
-	top := l.Offset(config["skirting"])
-	bottom := l.Offset(config["skirting"] - config["stringer_width"])
+func StringTopBottom(pitch geo.Line, config config.Params) (geo.Line, geo.Line) {
+	top := pitch.Offset(config["skirting"])
+	bottom := pitch.Offset(config["skirting"] - config["stringer_width"])
 	return top, bottom
 }
 
-func BottomLines() []Line {
-	ground := Line{
-		Point{0, 0}, Point{100, 0},
+func BottomLines() []geo.Line {
+	ground := geo.Line{
+		Start: geo.Point{X: 0, Y: 0},
+		End:   geo.Point{X: 100, Y: 0},
 	}
-	front := Line{
-		Point{0, 0}, Point{0, 100},
+	front := geo.Line{
+		Start: geo.Point{X: 0, Y: 0},
+		End:   geo.Point{X: 0, Y: 100},
 	}
-	ls := make([]Line, 2)
+	ls := make([]geo.Line, 2)
 	ls[0] = ground
 	ls[1] = front
 	return ls
 }
 
-func JoinBelow(pitch []Point, start Point, top, bottom Line, config Config, winder bool) Line {
+func JoinBelow(pitch []geo.Point, start geo.Point, top, bottom geo.Line, config config.Params, winder bool) geo.Line {
 	// join with the stringer below
 	offset := -1
 	if winder {
 		offset = -2
 	}
-	bp := Line{pitch[len(pitch)+offset], start}
-	bt, bb := bp.StringTopBottom(config)
-	a, _ := intersection(top, bt)
-	b, _ := intersection(bottom, bb)
-	return Line{a, b}
+	bp := geo.Line{
+		Start: pitch[len(pitch)+offset],
+		End:   start,
+	}
+	bt, bb := StringTopBottom(bp, config)
+	a, _ := geo.Intersection(top, bt)
+	b, _ := geo.Intersection(bottom, bb)
+	return geo.Line{
+		Start: a,
+		End:   b,
+	}
 }
 
-func JoinAbove(pitch []Point, end Point, top, bottom Line, config Config) Line {
-	ap := Line{end, pitch[len(pitch)-1]}
-	atop, abot := ap.StringTopBottom(config)
-	a, _ := intersection(top, atop)
-	b, _ := intersection(bottom, abot)
-	return Line{a, b}
+func JoinAbove(pitch []geo.Point, end geo.Point, top, bottom geo.Line, config config.Params) geo.Line {
+	ap := geo.Line{
+		Start: end,
+		End:   pitch[len(pitch)-1],
+	}
+	atop, abot := StringTopBottom(ap, config)
+	a, _ := geo.Intersection(top, atop)
+	b, _ := geo.Intersection(bottom, abot)
+	return geo.Line{
+		Start: a,
+		End:   b,
+	}
 }
 
-func TopLines(stair []Section, config Config) []Line {
+func TopLines(stair []Section, config config.Params) []geo.Line {
 	tr := TotalRise(stair, config)
 	tg := OutsideGoing(stair, config) + config["bottom_horn"] + config["riser_thickness"] + config["nosing"]
-	topFloor := Line{Point{0, tr}, Point{tg, tr}}
-	joist := Line{Point{tg, tr}, Point{tg, 0}}
+	topFloor := geo.Line{
+		Start: geo.Point{X: 0, Y: tr},
+		End:   geo.Point{X: tg, Y: tr},
+	}
+	joist := geo.Line{
+		Start: geo.Point{X: tg, Y: tr},
+		End:   geo.Point{X: tg, Y: 0},
+	}
 	hornTop := topFloor.Offset(config["top_horn_height"])
 	hornBack := joist.Offset(config["top_horn_length"])
-	ls := make([]Line, 4)
+	ls := make([]geo.Line, 4)
 	ls[0] = hornTop
 	ls[1] = hornBack
 	ls[2] = topFloor
@@ -416,7 +411,7 @@ func TopLines(stair []Section, config Config) []Line {
 	return ls
 }
 
-func TotalRise(stair []Section, config Config) float64 {
+func TotalRise(stair []Section, config config.Params) float64 {
 	rise := 0.0
 	for _, s := range stair {
 		rise = rise + float64(s.Steps)*config["rise"]
@@ -424,7 +419,7 @@ func TotalRise(stair []Section, config Config) float64 {
 	return rise + config["rise"]
 }
 
-func OutsideGoing(stair []Section, config Config) float64 {
+func OutsideGoing(stair []Section, config config.Params) float64 {
 	going := 0.0
 	for _, s := range stair {
 		if s.Kind == "straight" {
@@ -436,15 +431,15 @@ func OutsideGoing(stair []Section, config Config) float64 {
 	return going
 }
 
-func ControlPoints(ts []Point, stair []Section) [][]Point {
-	cps := make([][]Point, 0)
+func ControlPoints(ts []geo.Point, stair []Section) [][]geo.Point {
+	cps := make([][]geo.Point, 0)
 	for i := 0; i < len(stair); i++ {
 		end := 0
 		for j := i; j >= 0; j-- {
 			end = end + stair[j].Steps
 		}
 		start := end - stair[i].Steps
-		ps := make([]Point, 0)
+		ps := make([]geo.Point, 0)
 		if stair[i].Kind == "straight" {
 			ps = append(ps, ts[start])
 			ps = append(ps, ts[end])
@@ -456,7 +451,7 @@ func ControlPoints(ts []Point, stair []Section) [][]Point {
 	return cps
 }
 
-func drawPoints(ps []Point, ctx *canvas.Context, c color.Color) {
+func drawPoints(ps []geo.Point, ctx *canvas.Context, c color.Color) {
 	if len(ps) < 2 {
 		return
 	}
@@ -468,7 +463,7 @@ func drawPoints(ps []Point, ctx *canvas.Context, c color.Color) {
 	ctx.Stroke()
 }
 
-func toPath(ps []Point) clip.Path {
+func toPath(ps []geo.Point) clip.Path {
 	qs := make(clip.Path, len(ps))
 	for i, p := range ps {
 		qs[i] = clip.NewIntPointFromFloat(p.X*SCALE, p.Y*SCALE)
@@ -476,75 +471,75 @@ func toPath(ps []Point) clip.Path {
 	return qs
 }
 
-func fromPath(ps clip.Path) []Point {
-	qs := make([]Point, len(ps))
+func fromPath(ps clip.Path) []geo.Point {
+	qs := make([]geo.Point, len(ps))
 	for i, p := range ps {
 		dp := p.ToDoublePoint()
-		qs[i] = Point{dp.X / SCALE, dp.Y / SCALE}
+		qs[i] = geo.Point{X: dp.X / SCALE, Y: dp.Y / SCALE}
 	}
 	qs = append(qs, qs[0])
 	return qs
 }
 
-func tr(tip Point, cfg Config) ([]Point, []Point) {
+func tr(tip geo.Point, cfg config.Params) ([]geo.Point, []geo.Point) {
 	const (
 		TC = 1000
 		RC = 300
 	)
-	ts := make([]Point, 0)
+	ts := make([]geo.Point, 0)
 	ts = append(ts, tip)
-	ts = append(ts, Point{
-		tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
-		tip.Y,
+	ts = append(ts, geo.Point{
+		X: tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
+		Y: tip.Y,
 	})
-	ts = append(ts, Point{
-		tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
-		tip.Y - math.Tan(cfg["wedge_angle"])*TC - cfg["tread_thickness"],
+	ts = append(ts, geo.Point{
+		X: tip.X + TC + cfg["nosing"] + cfg["riser_thickness"],
+		Y: tip.Y - math.Tan(cfg["wedge_angle"])*TC - cfg["tread_thickness"],
 	})
-	ts = append(ts, Point{
-		tip.X + cfg["nosing"] + cfg["riser_thickness"],
-		tip.Y - cfg["tread_thickness"],
+	ts = append(ts, geo.Point{
+		X: tip.X + cfg["nosing"] + cfg["riser_thickness"],
+		Y: tip.Y - cfg["tread_thickness"],
 	})
-	ts = append(ts, Point{
-		tip.X,
-		tip.Y - cfg["tread_thickness"],
+	ts = append(ts, geo.Point{
+		X: tip.X,
+		Y: tip.Y - cfg["tread_thickness"],
 	})
 	ts = append(ts, tip)
-	rs := make([]Point, 0)
-	rTip := Point{
-		tip.X + cfg["nosing"],
-		tip.Y - cfg["tread_thickness"] + cfg["riser_rebate"],
+	rs := make([]geo.Point, 0)
+	rTip := geo.Point{
+		X: tip.X + cfg["nosing"],
+		Y: tip.Y - cfg["tread_thickness"] + cfg["riser_rebate"],
 	}
 	rs = append(rs, rTip)
-	rs = append(rs, Point{
-		rTip.X + cfg["riser_thickness"],
-		rTip.Y,
+	rs = append(rs, geo.Point{
+		X: rTip.X + cfg["riser_thickness"],
+		Y: rTip.Y,
 	})
-	rs = append(rs, Point{
-		rTip.X + cfg["riser_thickness"] + RC*math.Tan(cfg["wedge_angle"]),
-		rTip.Y - cfg["tread_thickness"] - RC,
+	rs = append(rs, geo.Point{
+		X: rTip.X + cfg["riser_thickness"] + RC*math.Tan(cfg["wedge_angle"]),
+		Y: rTip.Y - cfg["tread_thickness"] - RC,
 	})
-	rs = append(rs, Point{
-		rTip.X,
-		rTip.Y - cfg["tread_thickness"] - RC,
+	rs = append(rs, geo.Point{
+		X: rTip.X,
+		Y: rTip.Y - cfg["tread_thickness"] - RC,
 	})
 	rs = append(rs, rTip)
 
 	return ts, rs
 }
 
-func Tips(sections []Section, config Config) ([]Point, []Point) {
-	ps := make([]Point, 0)
-	at := Point{config["bottom_horn"], config["rise"]}
+func Tips(sections []Section, config config.Params) ([]geo.Point, []geo.Point) {
+	ps := make([]geo.Point, 0)
+	at := geo.Point{X: config["bottom_horn"], Y: config["rise"]}
 	ps = append(ps, at)
 
 	// each section is responsible for amking the step that steps into the next section
 	for _, s := range sections {
 		if s.Kind == "straight" {
 			for i := 1; i <= s.Steps; i++ {
-				ps = append(ps, Point{
-					at.X + config["going"]*float64(i),
-					at.Y + config["rise"]*float64(i),
+				ps = append(ps, geo.Point{
+					X: at.X + config["going"]*float64(i),
+					Y: at.Y + config["rise"]*float64(i),
 				})
 			}
 			at = ps[len(ps)-1]
@@ -552,124 +547,21 @@ func Tips(sections []Section, config Config) ([]Point, []Point) {
 			angle := math.Pi / 2 / float64(s.Steps)
 			if s.Steps == 3 {
 				// step 1
-				ps = append(ps, Point{
-					at.X + math.Tan(angle)*s.StartWidth,
-					at.Y + config["rise"],
+				ps = append(ps, geo.Point{
+					X: at.X + math.Tan(angle)*s.StartWidth,
+					Y: at.Y + config["rise"],
 				})
-				ps = append(ps, Point{
-					at.X + s.EndWidth + s.StartWidth - s.StartWidth*math.Tan(angle),
-					at.Y + 2*config["rise"],
+				ps = append(ps, geo.Point{
+					X: at.X + s.EndWidth + s.StartWidth - s.StartWidth*math.Tan(angle),
+					Y: at.Y + 2*config["rise"],
 				})
-				ps = append(ps, Point{
-					at.X + s.EndWidth + s.StartWidth,
-					at.Y + 3*config["rise"],
+				ps = append(ps, geo.Point{
+					X: at.X + s.EndWidth + s.StartWidth,
+					Y: at.Y + 3*config["rise"],
 				})
 				at = ps[len(ps)-1]
 			}
 		}
 	}
 	return ps, nil
-}
-
-func (l *Line) Draw(ctx *canvas.Context, c color.Color) {
-	ctx.SetStrokeColor(c)
-	ctx.MoveTo(l.Start.X, l.Start.Y)
-	ctx.LineTo(l.End.X, l.End.Y)
-	ctx.Stroke()
-}
-
-func (p *Point) Draw(ctx *canvas.Context, c color.Color, text string, face *canvas.FontFace) {
-	const (
-		SIZE   = 20
-		OFFSET = 10
-	)
-
-	a := Line{Point{p.X - SIZE, p.Y}, Point{p.X + SIZE, p.Y}}
-	b := Line{Point{p.X, p.Y - SIZE}, Point{p.X, p.Y + SIZE}}
-	ctx.DrawText(p.X+OFFSET, p.Y-OFFSET, canvas.NewTextBox(face, text, 0, 0, canvas.Left, canvas.Top, 0, 0))
-	a.Draw(ctx, c)
-	b.Draw(ctx, c)
-}
-func intersection(a, b Line) (Point, error) {
-	i := a.Start.X - a.End.X
-	j := b.Start.Y - b.End.Y
-	k := a.Start.Y - a.End.Y
-	l := b.Start.X - b.End.X
-	denom := i*j - k*l
-	if denom == 0 {
-		return Point{0, 0}, fmt.Errorf("lines are either parallel or coincident")
-	}
-	m := a.Start.X*a.End.Y - a.Start.Y*a.End.X
-	n := b.Start.X*b.End.Y - b.Start.Y*b.End.X
-	xn := m*l - i*n
-	yn := m*j - k*n
-	return Point{xn / denom, yn / denom}, nil
-}
-
-func (l *Line) Offset(d float64) Line {
-	scale := l.Length() / d
-
-	sl := l.Scale(1 / scale)
-	p := sl.Rotate(math.Pi / 2)
-	q := p.Translate(l.ZeroStart())
-	return Line{
-		p.End,
-		q.End,
-	}
-}
-
-func (l *Line) Reverse() Line {
-	return Line{
-		l.End,
-		l.Start,
-	}
-}
-
-func (l *Line) Length() float64 {
-	a := l.Start.X - l.End.X
-	b := l.Start.Y - l.End.Y
-	return math.Sqrt(a*a + b*b)
-}
-
-func (p *Point) Rotate(t float64) Point {
-	x := p.X*math.Cos(t) - p.Y*math.Sin(t)
-	y := p.X*math.Sin(t) + p.Y*math.Cos(t)
-	return Point{x, y}
-}
-
-func (p *Point) Scale(s float64) Point {
-	return Point{p.X * s, p.Y * s}
-}
-
-func (l *Line) Scale(s float64) Line {
-	e := l.ZeroStart()
-	f := e.Scale(s)
-	return Line{
-		l.Start,
-		f.Translate(l.Start),
-	}
-}
-
-func (l *Line) ZeroStart() Point {
-	return l.End.Translate(Point{-1 * l.Start.X, -1 * l.Start.Y})
-}
-
-func (l *Line) Rotate(t float64) Line {
-	e := l.ZeroStart()
-	f := e.Rotate(t)
-	return Line{
-		l.Start,
-		f.Translate(l.Start),
-	}
-}
-
-func (p *Point) Translate(d Point) Point {
-	return Point{p.X + d.X, p.Y + d.Y}
-}
-
-func (l *Line) Translate(d Point) Line {
-	return Line{
-		l.Start.Translate(d),
-		l.End.Translate(d),
-	}
 }
