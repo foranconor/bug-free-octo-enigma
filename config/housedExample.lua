@@ -1,23 +1,27 @@
-local cfg = require("lua/housed")
-local materials = require("lua/materials")
+local stair1 = require("lua/housed")
+local stair2 = require("lua/housed")
 
-cfg.details = {
-	quote = "K471",
-	stairway = "1",
-	quantity = 3,
-	address = "40 Raiha St",
-	classification = "Main Private",
-	site_contact = {
-		name = "John Smith",
-		phone = "021 123 4567",
-	},
+local job = require("lua/job")
+
+job.quote = "Q1234"
+job.address = "40 Raiha St"
+job.site_contact = {
+	name = "Hone Smith",
+	phone = "021 123 4567",
 }
 
-cfg.sections = {
+stair1.name = "1"
+stair1.classification = "Secondary Private"
+
+stair1.sections = {
 	{
 		kind = "Straight",
 		steps = 10,
 		width = 1000,
+		split = {
+			where = "middle",
+			how = "short",
+		},
 	},
 	{
 		kind = "Winder",
@@ -28,10 +32,21 @@ cfg.sections = {
 	},
 }
 
--- override housed defaults
-cfg.going = 280
-cfg.nosing.overhang = 0
-cfg.nosing.bottom_radius = 0
-cfg.stringers = materials.radiata300x50
+stair2.name = "Upper"
+stair2.quantity = 4
 
-return cfg
+stair2.sections = {
+	{
+		kind = "Straight",
+		steps = 5,
+		width = 1023,
+		split = nil,
+	},
+}
+
+job.stairs = {
+	stair1,
+	stair2,
+}
+
+return job

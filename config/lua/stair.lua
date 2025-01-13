@@ -1,5 +1,8 @@
 -- Parameters that all stairs must have
 return {
+	name = "Unknown",
+	classification = "Main Private",
+	quantity = 1,
 	going = 255,
 	rise = 190,
 	style = "Unknown",

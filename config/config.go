@@ -66,6 +66,7 @@ func LoadStair(path string) (*Stair, error) {
 			Bad:     bad,
 		}
 	}
+	pretty.Println(tab)
 	return nil, nil
 }
 

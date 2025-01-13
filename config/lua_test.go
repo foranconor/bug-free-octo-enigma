@@ -7,7 +7,7 @@ import (
 )
 
 func TestLua(t *testing.T) {
-	_, err := LoadStair("cutExample.lua")
+	_, err := LoadStair("housedExample.lua")
 	if err != nil {
 		pretty.Println(err)
 		t.Fail()

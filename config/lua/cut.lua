@@ -1,5 +1,5 @@
 local materials = require("lua/materials")
-local cfg = require("lua/essential")
+local cfg = require("lua/stair")
 
 cfg.style = "Cut"
 

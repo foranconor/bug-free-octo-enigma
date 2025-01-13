@@ -23,6 +23,7 @@ require (
 	github.com/tdewolff/minify/v2 v2.21.1 // indirect
 	github.com/tdewolff/parse/v2 v2.7.19 // indirect
 	github.com/wcharczuk/go-chart/v2 v2.1.2 // indirect
+	github.com/yuin/gopher-lua v1.1.1 // indirect
 	golang.org/x/image v0.22.0 // indirect
 	golang.org/x/net v0.30.0 // indirect
 	golang.org/x/text v0.20.0 // indirect
